@@ -25,11 +25,11 @@ const useSignup = () => {
     setLoading(true);
     
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/signup`, {
+      const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fullName, // renaming for backend compatibility
+          fullName,
           username,
           password,
           confirmPassword,
@@ -41,7 +41,7 @@ const useSignup = () => {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.detail || "Signup failed");
+        throw new Error(data.error || "Signup failed");
       }
 
       localStorage.setItem("chat-user", JSON.stringify(data));

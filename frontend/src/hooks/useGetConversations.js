@@ -9,10 +9,10 @@ const useGetConversations = () => {
     const getConversations = async () => {
       setLoading(true);
       try {
-        const res = await fetch("http://localhost:3000/api/users", {
-  method: "GET",
-  credentials: "include", // 👈 This is required to send cookies
-});
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users`, {
+          method: "GET",
+          credentials: "include",
+        });
 
         const data = await res.json();
         if (data.error) {

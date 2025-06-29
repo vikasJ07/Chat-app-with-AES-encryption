@@ -1,21 +1,11 @@
-import { useSocketContext } from "../context/SocketContext";
-import useConversation from "../zustand/useConversation";
 import { useEffect } from "react";
-import notificationSound from "../assets/sounds/notification.mp3";
+import { useSocketContext } from "../context/SocketContext";
 
+// This hook is now a no-op after reverting real-time message logic.
 const useListenMessages = () => {
-  const { socket } = useSocketContext();
-  const { messages, setMessages } = useConversation();
-
-  useEffect(() => {
-    socket?.on("newMessage", (newMessage) => {
-      newMessage.shouldShake = true;
-      const sound = new Audio(notificationSound);
-      sound.play();
-      setMessages([...messages, newMessage]);
-    });
-    return () => socket?.off("newMessage");
-  }, [socket, setMessages, messages]);
+  // No need to do anything here, as messages are managed in SocketContext
+  // This hook is now a no-op, but can be used for side effects if needed
+  useEffect(() => {}, []);
 };
 
 export default useListenMessages;

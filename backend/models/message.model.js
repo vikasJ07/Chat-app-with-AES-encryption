@@ -24,6 +24,48 @@ const messageSchema = new mongoose.Schema(
       type: String, // The key used to encrypt the message (stored as hex)
       required: true,
     },
+    status: {
+      type: String,
+      enum: ["sent", "delivered", "read"],
+      default: "sent",
+    },
+    reactions: [{
+      userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      type: {
+        type: String,
+        enum: ["like", "love", "laugh", "wow", "sad", "angry"],
+      },
+    }],
+    replyTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Message",
+    },
+    attachments: [{
+      type: {
+        type: String,
+        enum: ["image", "document", "audio", "video"],
+      },
+      url: String,
+      name: String,
+      size: Number,
+    }],
+    isEdited: {
+      type: Boolean,
+      default: false,
+    },
+    editedAt: {
+      type: Date,
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+    },
   },
   { timestamps: true } // Automatically adds createdAt and updatedAt timestamps
 );
@@ -126,6 +168,46 @@ messageSchema.methods.decryptMessage = function () {
     console.log("📏  Decrypted message length: " + decryptedMessageLength + " characters");
     console.log("");
   }
+};
+
+// Add method to update message status
+messageSchema.methods.updateStatus = function(status) {
+  this.status = status;
+  return this.save();
+};
+
+// Add method to add reaction
+messageSchema.methods.addReaction = async function(userId, reactionType) {
+  const existingReaction = this.reactions.find(r => r.userId.toString() === userId.toString());
+  
+  if (existingReaction) {
+    if (existingReaction.type === reactionType) {
+      // Remove reaction if same type
+      this.reactions = this.reactions.filter(r => r.userId.toString() !== userId.toString());
+    } else {
+      // Update reaction type
+      existingReaction.type = reactionType;
+    }
+  } else {
+    // Add new reaction
+    this.reactions.push({ userId, type: reactionType });
+  }
+  
+  return this.save();
+};
+
+// Add method to mark message as edited
+messageSchema.methods.markAsEdited = function() {
+  this.isEdited = true;
+  this.editedAt = new Date();
+  return this.save();
+};
+
+// Add method to mark message as deleted
+messageSchema.methods.markAsDeleted = function() {
+  this.isDeleted = true;
+  this.deletedAt = new Date();
+  return this.save();
 };
 
 // Create the Message model from the schema

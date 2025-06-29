@@ -1,8 +1,9 @@
 import Conversation from "../models/conversation.model.js";
 import Message from "../models/message.model.js";
 import { performance } from "perf_hooks";
-import { getReceiverSocketId, io } from "../socket/socket.js";
+import { getReceiverSocketId, getIO } from "../socket/socket.js";
 import os from "os";
+import User from "../models/user.model.js";
 
 // Funcția startCPUUsage măsoară utilizarea CPU la un moment dat
 function startCPUUsage() {
@@ -60,9 +61,12 @@ async function delay(ms) {
 
 export const sendMessage = async (req, res) => {
   try {
-    const { message } = req.body;
+    const { message, replyTo } = req.body;
     const { id: receiverId } = req.params;
     const senderId = req.user._id;
+
+    console.log("Sending message:", { message, receiverId, senderId, replyTo });
+    
     let conversation = await Conversation.findOne({
       participants: { $all: [senderId, receiverId] },
     });
@@ -75,88 +79,195 @@ export const sendMessage = async (req, res) => {
       senderId,
       receiverId,
       message,
+      replyTo,
     });
-    // Măsurare resurse înainte de criptare
-    const startUsageEncrypt = startCPUUsage();
-    const startEncrypt = performance.now();
+    
+    // Encrypt message
     newMessage.encryptMessage();
-    await delay(100); // Se introduce un mic delay pentru a permite capturarea modificărilor
-    const endEncrypt = performance.now();
-    const endUsageEncrypt = getCPUUsage(startUsageEncrypt);
-    const timeEncrypt = (endEncrypt - startEncrypt).toFixed(2);
-    console.log(
-      "⏱️  Timpul necesar pentru criptarea mesajului: " + timeEncrypt + " ms"
-    );
-    console.log("");
-    console.log("🔄  Utilizare CPU în timpul criptării  🔒");
-    console.log(
-      "💻  Procentul de timp în care CPU a fost ocupat cu executarea codului de aplicație: ",
-      endUsageEncrypt.user,
-      "%"
-    );
-    console.log(
-      "🛠️  Procentul de timp în care CPU a fost ocupat cu execuția codului de kernel: ",
-      endUsageEncrypt.sys,
-      "%"
-    );
-    console.log(
-      "🛌  Procentul de timp în care CPU a fost inactiv: ",
-      endUsageEncrypt.idle,
-      "%"
-    );
-    console.log(
-      "⚡  Procentul de timp în care CPU a fost ocupat cu procesarea întreruperilor hardware: ",
-      endUsageEncrypt.irq,
-      "%"
-    );
-    console.log("");
+    
     if (newMessage) {
       conversation.messages.push(newMessage._id);
     }
     await Promise.all([conversation.save(), newMessage.save()]);
-    // Măsurare resurse înainte de decriptare
-    const startUsageDecrypt = startCPUUsage();
-    const startDecrypt = performance.now();
+    
+    // Decrypt message for client
     newMessage.decryptMessage();
-    await delay(100); // Se introduce un mic delay pentru a permite capturarea modificărilor
-    const endDecrypt = performance.now();
-    const endUsageDecrypt = getCPUUsage(startUsageDecrypt);
-    const timeDecrypt = (endDecrypt - startDecrypt).toFixed(2);
-    console.log(
-      "⏱️  Timpul necesar pentru decriptarea mesajului: " + timeDecrypt + " ms"
-    );
-    console.log("");
-    console.log("🔄  Utilizare CPU în timpul decriptării  🔓");
-    console.log(
-      "💻  Procentul de timp în care CPU a fost ocupat cu executarea codului de aplicație: ",
-      endUsageDecrypt.user,
-      "%"
-    );
-    console.log(
-      "🛠️  Procentul de timp în care CPU a fost ocupat cu execuția codului de kernel: ",
-      endUsageDecrypt.sys,
-      "%"
-    );
-    console.log(
-      "🛌  Procentul de timp în care CPU a fost inactiv: ",
-      endUsageDecrypt.idle,
-      "%"
-    );
-    console.log(
-      "⚡  Procentul de timp în care CPU a fost ocupat cu procesarea întreruperilor hardware: ",
-      endUsageDecrypt.irq,
-      "%"
-    );
-    console.log(
-      "____________________________________________________________________________________________________________________________________________________________________"
-    );
+
+    // Get Socket.IO instance
+    const io = getIO();
+    
+    // Get receiver's socket ID
     const receiverSocketId = getReceiverSocketId(receiverId);
+    const senderSocketId = getReceiverSocketId(senderId);
+    
     if (receiverSocketId) {
+      console.log("Emitting newMessage to receiver");
       io.to(receiverSocketId).emit("newMessage", newMessage);
+      // Emit typing stopped event
+      io.to(receiverSocketId).emit("typingStopped", { senderId });
     }
+    if (senderSocketId) {
+      console.log("Emitting newMessage to sender");
+      io.to(senderSocketId).emit("newMessage", newMessage);
+    }
+    
     res.status(201).json(newMessage);
   } catch (error) {
     console.log("Error in sendMessage controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const updateMessageStatus = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { status } = req.body;
+    
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+    
+    await message.updateStatus(status);
+    
+    // Emit status update to sender
+    const io = getIO();
+    const senderSocketId = getReceiverSocketId(message.senderId);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit("messageStatusUpdate", {
+        messageId,
+        status,
+      });
+    }
+    
+    res.status(200).json({ message: "Status updated successfully" });
+  } catch (error) {
+    console.log("Error in updateMessageStatus controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const addReaction = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { reactionType } = req.body;
+    const userId = req.user._id;
+    
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+    
+    await message.addReaction(userId, reactionType);
+    
+    // Emit reaction update to all participants
+    const io = getIO();
+    const conversation = await Conversation.findOne({
+      messages: messageId,
+    });
+    
+    if (conversation) {
+      conversation.participants.forEach((participantId) => {
+        const socketId = getReceiverSocketId(participantId);
+        if (socketId) {
+          io.to(socketId).emit("messageReactionUpdate", {
+            messageId,
+            reactions: message.reactions,
+          });
+        }
+      });
+    }
+    
+    res.status(200).json({ message: "Reaction added successfully" });
+  } catch (error) {
+    console.log("Error in addReaction controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const editMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { newMessage } = req.body;
+    const userId = req.user._id;
+    
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+    
+    if (message.senderId.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "Not authorized to edit this message" });
+    }
+    
+    message.message = newMessage;
+    message.encryptMessage();
+    await message.markAsEdited();
+    await message.save();
+    
+    // Emit edit update to all participants
+    const io = getIO();
+    const conversation = await Conversation.findOne({
+      messages: messageId,
+    });
+    
+    if (conversation) {
+      conversation.participants.forEach((participantId) => {
+        const socketId = getReceiverSocketId(participantId);
+        if (socketId) {
+          io.to(socketId).emit("messageEdited", {
+            messageId,
+            message: newMessage,
+            isEdited: true,
+            editedAt: message.editedAt,
+          });
+        }
+      });
+    }
+    
+    res.status(200).json({ message: "Message edited successfully" });
+  } catch (error) {
+    console.log("Error in editMessage controller: ", error.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const userId = req.user._id;
+    
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+    
+    if (message.senderId.toString() !== userId.toString()) {
+      return res.status(403).json({ error: "Not authorized to delete this message" });
+    }
+    
+    await message.markAsDeleted();
+    
+    // Emit delete update to all participants
+    const io = getIO();
+    const conversation = await Conversation.findOne({
+      messages: messageId,
+    });
+    
+    if (conversation) {
+      conversation.participants.forEach((participantId) => {
+        const socketId = getReceiverSocketId(participantId);
+        if (socketId) {
+          io.to(socketId).emit("messageDeleted", {
+            messageId,
+          });
+        }
+      });
+    }
+    
+    res.status(200).json({ message: "Message deleted successfully" });
+  } catch (error) {
+    console.log("Error in deleteMessage controller: ", error.message);
     res.status(500).json({ error: "Internal server error" });
   }
 };
@@ -168,11 +279,14 @@ export const getMessages = async (req, res) => {
     const conversation = await Conversation.findOne({
       participants: { $all: [senderId, userToChatId] },
     }).populate("messages");
+    
     if (!conversation) return res.status(200).json([]);
+    
     const messages = conversation.messages.map((message) => {
       message.decryptMessage();
       return message;
     });
+    
     res.status(200).json(messages);
   } catch (error) {
     console.log("Error in getMessages controller: ", error.message);

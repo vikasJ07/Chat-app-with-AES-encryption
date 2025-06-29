@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import useSendMessage from "../../hooks/useSendMessage";
 import { BsSend } from "react-icons/bs";
+import useConversation from "../../zustand/useConversation";
 
 const MessageInput = () => {
   const [message, setMessage] = useState("");
-  const { loading, sendMessage } = useSendMessage();
+  const { selectedConversation } = useConversation();
+  const { loading, sendMessage } = useSendMessage(selectedConversation);
   const textareaRef = useRef(null);
 
   const handleInput = (e) => {
@@ -28,7 +30,19 @@ const MessageInput = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!message) return;
+    if (!message.trim()) return;
+
+    // Optimistic UI update: dispatch a custom event
+    const optimisticMessage = {
+      _id: Date.now().toString(),
+      senderId: JSON.parse(localStorage.getItem("chat-user"))._id,
+      receiverId: selectedConversation._id,
+      message,
+      createdAt: new Date().toISOString(),
+      shouldShake: true,
+    };
+    window.dispatchEvent(new CustomEvent("optimistic-message", { detail: optimisticMessage }));
+
     await sendMessage(message);
     setMessage("");
     if (textareaRef.current) {
@@ -43,24 +57,28 @@ const MessageInput = () => {
   }, [message]);
 
   return (
-    <form className="px-4 my-3" onSubmit={handleSubmit}>
+    <form className="px-4 py-3" onSubmit={handleSubmit}>
       <div className="w-full relative">
         <textarea
           ref={textareaRef}
-          className="border text-sm rounded-lg block w-full-custom p-2.5  bg-gray-700 border-gray-600 text-white"
-          placeholder="Send a message"
+          className="w-full bg-base-100 dark:bg-base-200 border border-base-300 dark:border-base-300 rounded-2xl py-3 pl-5 pr-16 text-base-content focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-md resize-none transition-all placeholder:text-base-content/60"
+          placeholder="Type your message..."
           value={message}
           onChange={handleInput}
-          style={{ overflow: "hidden", resize: "none", lineHeight: "1.5em" }}
+          style={{ overflow: "hidden", lineHeight: "1.5em" }}
+          rows={1}
+          maxLength={1000}
         />
         <button
           type="submit"
-          className="absolute inset-y-0 end-0 flex items-center pe-3"
+          className="absolute right-3 bottom-3 bg-primary text-primary-content rounded-full p-3 shadow-lg hover:scale-110 focus:scale-105 transition-all duration-200 flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed"
+          disabled={loading || !message.trim()}
+          aria-label="Send message"
         >
           {loading ? (
-            <div className="loading loading-spinner"></div>
+            <span className="loading loading-spinner"></span>
           ) : (
-            <BsSend />
+            <BsSend className="w-6 h-6" />
           )}
         </button>
       </div>
